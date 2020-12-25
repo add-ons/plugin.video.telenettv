@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<settings>
+    <category label="Credentials">
+        <setting label="username" type="text" id="username" default=""/>
+        <setting label="password" type="text" id="password" default="" option="hidden"/>
+    </category>
+
+    <category>
+        <control type="radiobutton" id="2" label="Use MPEG Dash"/>
+        <control type="radiobutton" id="2" label="Use Smoothstream"/>
+    </category>
+</settings>
+
