@@ -5,9 +5,8 @@
         <setting label="password" type="text" id="password" default="" option="hidden"/>
     </category>
 
-    <category>
-        <control type="radiobutton" id="2" label="Use MPEG Dash"/>
-        <control type="radiobutton" id="2" label="Use Smoothstream"/>
+    <category label="Streaming Options">
+        <setting type="select" label="Choose streaming format" default="MPEG Dash" id="streamingFormat" values="MPEG Dash|Smoothstream" />
     </category>
 </settings>
 

@@ -8,7 +8,6 @@ import xbmcaddon
 from resources.lib import kodilogging
 from xbmcgui import ListItem
 from xbmcplugin import addDirectoryItems, endOfDirectory, setResolvedUrl
-import os
 
 try:  # Python 3
     from urllib.parse import quote
@@ -16,13 +15,13 @@ except ImportError:  # Python 2
     from urllib2 import quote
 
 from resources.lib.TelenetTV import TelenetTV
+from resources.lib.Classes.StreamingFormat import StreamingFormat
 
 ADDON = xbmcaddon.Addon()
 logger = logging.getLogger(ADDON.getAddonInfo('id'))
 kodilogging.config()
 plugin = routing.Plugin()
 
-PROTOCOL = 'ism'
 DRM = 'com.widevine.alpha'
 LICENSE_URL = 'https://obo-prod.oesp.telenettv.be/oesp/v4/BE/nld/web/license/eme'
 
@@ -46,12 +45,20 @@ def index():
                 'thumb': channel.thumbnail
             })
 
-        list_item.setInfo('video', {})
+        list_item.setInfo('video', {'title': channel.title})
         list_item.setProperty('IsPlayable', "true")
 
+        streaming_format = StreamingFormat.get_streaming_format()
+        if streaming_format == StreamingFormat.SMOOTH_STREAM:
+            content_locator = channel.stream_HLS.contentLocator
+            protection_key = channel.stream_HLS.protectionKey
+        else:
+            content_locator = channel.stream_DASH.contentLocator
+            protection_key = channel.stream_DASH.protectionKey
+
         listing.append((plugin.url_for(play_channel,
-                                       content_locator=channel.stream_HLS.contentLocator,
-                                       protection_key=channel.stream_HLS.protectionKey), list_item, False))
+                                       content_locator=content_locator,
+                                       protection_key=protection_key), list_item, False))
 
     addDirectoryItems(plugin.handle, listing, len(listing))
     endOfDirectory(plugin.handle, cacheToDisc=False)
@@ -62,15 +69,23 @@ def play_channel(content_locator, protection_key):
     tv.clear_streams()
     tv.request_license_token(content_locator)
 
-    manifest_url = tv.create_manifest_url(protection_key)
+    streaming_format = StreamingFormat.get_streaming_format()
+    if streaming_format == StreamingFormat.MPEG_DASH:
+        protocol = "mpd"
+    elif streaming_format == StreamingFormat.SMOOTH_STREAM:
+        protocol = "ism"
+    else:
+        protocol = ""
 
-    is_helper = inputstreamhelper.Helper(PROTOCOL, drm=DRM)
+    is_helper = inputstreamhelper.Helper(protocol, drm=DRM)
     if is_helper.check_inputstream():
+        manifest_url = tv.create_manifest_url(protection_key)
+
         play_item = ListItem(path=manifest_url)
         play_item.setContentLookup(False)
 
         play_item.setProperty('inputstreamaddon', is_helper.inputstream_addon)
-        play_item.setProperty('inputstream.adaptive.manifest_type', PROTOCOL)
+        play_item.setProperty('inputstream.adaptive.manifest_type', protocol)
         play_item.setProperty('inputstream.adaptive.license_type', DRM)
         play_item.setProperty('inputstream.adaptive.manifest_update_parameter', 'full')
         play_item.setProperty('inputstream.adaptive.license_key',
@@ -98,6 +113,7 @@ def play_channel(content_locator, protection_key):
                                   payload="R{SSM}",
                               ))
         setResolvedUrl(plugin.handle, True, listitem=play_item)
+
 
 def run():
     plugin.run()

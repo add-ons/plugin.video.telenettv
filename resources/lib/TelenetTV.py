@@ -4,6 +4,7 @@ from resources.lib.Utils import Utils
 from resources.lib.Classes.Channel import Channel
 from resources.lib.Classes.Stream import Stream
 from resources.lib.Utils.PluginCache import PluginCache
+from resources.lib.Classes.StreamingFormat import StreamingFormat
 
 DEVICE_NAME = "Mijn computer - Google Chrome"
 DEVICE_CLASS = "desktop"
@@ -232,12 +233,17 @@ class TelenetTV(Authentication):
     def create_manifest_url(self, channel):
         self.license_token = PluginCache.get_by_key("licenseToken")
 
-        url = "https://wp1-halo01-vxtoken-live-be-prod.tnprod.cdn.dmdsdp.com/ss/{};vxttoken={}/Manifest" \
-            .format(channel, self.license_token)
+        streaming_format = StreamingFormat.get_streaming_format()
+        if streaming_format == StreamingFormat.MPEG_DASH:
+            url = Stream.BASE_URL_MPD
+        elif streaming_format == StreamingFormat.SMOOTH_STREAM:
+            url = Stream.BASE_URL_HSS
+        else:
+            url = ""
 
-        print("KIJK", url)
+        formatted_url = url.format(channel, self.license_token)
 
-        return url
+        return formatted_url
 
     def _get_refresh_token(self):
         HEADER = {
