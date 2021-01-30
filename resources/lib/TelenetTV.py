@@ -5,7 +5,6 @@ from resources.lib.Classes.Channel import Channel
 from resources.lib.Classes.Stream import Stream
 from resources.lib.Utils.PluginCache import PluginCache
 from resources.lib.Classes.StreamingFormat import StreamingFormat
-<<<<<<< HEAD
 import random
 import json
 import base64
@@ -13,8 +12,7 @@ from datetime import datetime, timedelta
 import time
 
 from resources.lib.kodiwrapper import KodiWrapper
-=======
->>>>>>> c31fd948d956a294f41647f99afecc5c7c8e6ae6
+
 
 DEVICE_NAME = "Mijn computer - Google Chrome"
 DEVICE_CLASS = "other"
