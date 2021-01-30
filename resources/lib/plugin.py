@@ -8,6 +8,11 @@ import xbmcaddon
 from resources.lib import kodilogging
 from xbmcgui import ListItem
 from xbmcplugin import addDirectoryItems, endOfDirectory, setResolvedUrl
+<<<<<<< HEAD
+from resources.lib.Classes.Exceptions.DeviceLimitReachedException import DeviceLimitReachedException
+from resources.lib.kodiwrapper import KodiWrapper
+=======
+>>>>>>> c31fd948d956a294f41647f99afecc5c7c8e6ae6
 
 try:  # Python 3
     from urllib.parse import quote
@@ -50,13 +55,25 @@ def index():
 
         streaming_format = StreamingFormat.get_streaming_format()
         if streaming_format == StreamingFormat.SMOOTH_STREAM:
+<<<<<<< HEAD
+            stream_base_url = channel.stream_HLS.baseUrl
             content_locator = channel.stream_HLS.contentLocator
             protection_key = channel.stream_HLS.protectionKey
         else:
+            stream_base_url = channel.stream_DASH.baseUrl
+=======
+            content_locator = channel.stream_HLS.contentLocator
+            protection_key = channel.stream_HLS.protectionKey
+        else:
+>>>>>>> c31fd948d956a294f41647f99afecc5c7c8e6ae6
             content_locator = channel.stream_DASH.contentLocator
             protection_key = channel.stream_DASH.protectionKey
 
         listing.append((plugin.url_for(play_channel,
+<<<<<<< HEAD
+                                       base_uri=stream_base_url,
+=======
+>>>>>>> c31fd948d956a294f41647f99afecc5c7c8e6ae6
                                        content_locator=content_locator,
                                        protection_key=protection_key), list_item, False))
 
@@ -64,10 +81,12 @@ def index():
     endOfDirectory(plugin.handle, cacheToDisc=False)
 
 
-@plugin.route('/play/locator/<content_locator>/key/<protection_key>')
-def play_channel(content_locator, protection_key):
-    tv.clear_streams()
-    tv.request_license_token(content_locator)
+@plugin.route('/play/locator/<base_uri>/<content_locator>/key/<protection_key>')
+def play_channel(base_uri, content_locator, protection_key):
+    try:
+        tv.request_license_token(content_locator)
+    except DeviceLimitReachedException as ex:
+        return KodiWrapper.error_dialog(str(ex))
 
     streaming_format = StreamingFormat.get_streaming_format()
     if streaming_format == StreamingFormat.MPEG_DASH:
@@ -79,15 +98,23 @@ def play_channel(content_locator, protection_key):
 
     is_helper = inputstreamhelper.Helper(protocol, drm=DRM)
     if is_helper.check_inputstream():
+<<<<<<< HEAD
+        manifest_url = tv.create_manifest_url(base_uri, protection_key)
+=======
         manifest_url = tv.create_manifest_url(protection_key)
+>>>>>>> c31fd948d956a294f41647f99afecc5c7c8e6ae6
 
         play_item = ListItem(path=manifest_url)
         play_item.setContentLookup(False)
+        play_item.setMimeType('application/dash+xml')
 
+        server_certificate = tv.get_server_certificate(content_locator)
+
+        play_item.setProperty('inputstream.adaptive.server_certificate', server_certificate)
+        play_item.setProperty('inputstream.adaptive.license_flags', 'persistent_storage')
         play_item.setProperty('inputstreamaddon', is_helper.inputstream_addon)
         play_item.setProperty('inputstream.adaptive.manifest_type', protocol)
         play_item.setProperty('inputstream.adaptive.license_type', DRM)
-        play_item.setProperty('inputstream.adaptive.manifest_update_parameter', 'full')
         play_item.setProperty('inputstream.adaptive.license_key',
                               '%(url)s|'
                               'User-Agent=%(ua)s'
@@ -100,7 +127,8 @@ def play_channel(content_locator, protection_key):
                               '&X-OESP-License-Token-Type=%(oespLicTokenType)s'
                               '&X-OESP-Token=%(oespToken)s'
                               '&X-OESP-Username=%(oespUsername)s'
-                              '|%(payload)s|R'
+                              '&X-OESP-Profile-Id=%(profileId)s'
+                              '|%(payload)s|'
                               % dict(
                                   url=LICENSE_URL,
                                   ua=quote(tv.USER_AGENT),
@@ -111,6 +139,8 @@ def play_channel(content_locator, protection_key):
                                   oespContentLoc=content_locator,
                                   oespLicTokenType="velocix",
                                   payload="R{SSM}",
+                                  deviceId=tv.device_id,
+                                  profileId = tv.shared_profile_id
                               ))
         setResolvedUrl(plugin.handle, True, listitem=play_item)
 

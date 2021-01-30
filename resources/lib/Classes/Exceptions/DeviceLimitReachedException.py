@@ -1,0 +1,2 @@
+class DeviceLimitReachedException(Exception):
+    pass

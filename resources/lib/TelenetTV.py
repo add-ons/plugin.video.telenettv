@@ -1,21 +1,62 @@
-import json as jsn
 from resources.lib.Authentication import Authentication
+from resources.lib.Classes.Devices import Device
 from resources.lib.Utils import Utils
 from resources.lib.Classes.Channel import Channel
 from resources.lib.Classes.Stream import Stream
 from resources.lib.Utils.PluginCache import PluginCache
 from resources.lib.Classes.StreamingFormat import StreamingFormat
+<<<<<<< HEAD
+import random
+import json
+import base64
+from datetime import datetime, timedelta
+import time
+
+from resources.lib.kodiwrapper import KodiWrapper
+=======
+>>>>>>> c31fd948d956a294f41647f99afecc5c7c8e6ae6
 
 DEVICE_NAME = "Mijn computer - Google Chrome"
-DEVICE_CLASS = "desktop"
+DEVICE_CLASS = "other"
+TOKEN_EXPIRY_GAP_MINUTES = 30
 
 if not PluginCache.key_exists("deviceId"):
     PluginCache.set_data({"deviceId": "fe88cd8ace897d72c78441f648a2f92a4e298cced867179932d7c2751d79fb83"})
 
 
+class BadRequest(object):
+    class KnownErrorCodes:
+        DEVICE_UNREGISTERED = "deviceUnregistered"
+        DEVICE_UNREGISTERED_DEVICE_LIMIT_REACHED = "deviceUnregisteredDeviceLimitReached"
+
+    def __init__(self, error_type="", code="", reason=""):
+        self.type = error_type
+        self.code = code
+        self.reason = reason
+
+    @staticmethod
+    def parse_error_object(json_data):
+        error_obj = json_data[0]
+
+        try:
+            return BadRequest(
+                error_type=error_obj.get("type"),
+                code=error_obj.get("code"),
+                reason=error_obj.get("reason")
+            )
+        except KeyError:
+            return BadRequest()
+
+
 class TelenetTV(Authentication):
     def __init__(self, session, logger_instance=None):
         super(self.__class__, self).__init__(session)
+        self.logger = logger_instance
+
+        self.device_id = PluginCache.get_by_key("deviceId")
+        self.oesp_token = PluginCache.get_by_key("oespToken")
+        self.shared_profile_id = PluginCache.get_by_key("sharedProfileId")
+        self.license_token = ""
 
         if self.must_login():
             self.web_authorization()
@@ -23,61 +64,89 @@ class TelenetTV(Authentication):
             self.login()
             self.request_tokens()
 
-        self.oesp_token = PluginCache.get_by_key("oespToken")
-        self.shared_profile_id = PluginCache.get_by_key("sharedProfileId")
-        self.license_token = ""
-        self.logger = logger_instance
+        self._check_oesp_validity()
 
-        self.device_id = PluginCache.get_by_key("deviceId")
+    def construct_header(self, content_type='application/json'):
+        header = {
+            'User-Agent': self.USER_AGENT,
+            'Accept': content_type,
+            'Content-Type': content_type,
+            'X-OESP-Token': self.oesp_token,
+            'X-OESP-Username': self.username,
+            'X-OESP-Profile-Id': self.shared_profile_id,
+            'X-Client-Id': self.CLIENT_ID
+        }
+
+        return header
 
     @staticmethod
     def must_login():
         return not PluginCache.key_exists("oespToken") or not PluginCache.key_exists("token")
 
-    def resume_session(self):
-        username = PluginCache.get_by_key("username")
-        oesp_token = PluginCache.get_by_key("oespToken")
+    def refresh_token(self):
+        r = Utils.make_request(self.session,
+                               method="GET",
+                               url="https://obo-prod.oesp.telenettv.be/oesp/v4/BE/nld/web/session",
+                               headers=self.construct_header())
 
-        HEADER = {
-            'User-Agent': self.USER_AGENT,
-            'Accept': 'application/json',
-            'Content-Type': 'application/json',
-            'X-OESP-Token': oesp_token,
-            'X-OESP-Username': username
-        }
+        json_data = r.json()
 
-        r = self.session.get("https://obo-prod.oesp.telenettv.be/oesp/v4/BE/nld/web/session", headers=HEADER)
+        oesp_token = json_data["oespToken"]
+        PluginCache.set_data({
+            "oespToken": oesp_token
+        })
 
-        json = r.json()
 
-        return json["oespToken"]
+    def get_program_schedule(self, station_id):
+        timestamp = int(time.time())
 
-    def get_location_id(self):
-        r = self.session.get("https://obo-prod.oesp.telenettv.be/oesp/v4/BE/nld/web/session")
-        json = Utils.get_json(r)
+        r = Utils.make_request(self.session,
+                               method="GET",
+                               url="https://obo-prod.oesp.telenettv.be/oesp/v4/BE/nld/web/listings?"
+                                   "byEndTime={}~"
+                                   "&byStationId={}"
+                                   "&range=1-1&sort=startTime".format(timestamp, station_id),
+                               headers={'User-Agent': self.USER_AGENT})
 
-        if "locationId" in json:
-            return json["locationId"]
+        json_data = r.json()
+        program = json_data["listings"][0]["program"]
 
-        return None
+        return program
 
     def get_channels(self):
-        r = self.session.get("https://obo-prod.oesp.telenettv.be/oesp/v4/BE/nld/web/channels?"
-                             "byLocationId={}"
-                             "&includeInvisible=false"
-                             "&sort=channelNumber"
-                             .format(self.get_location_id()))
+        r = Utils.make_request(
+            self.session,
+            method="GET",
+            headers=self.construct_header(),
+            url="https://obo-prod.oesp.telenettv.be/oesp/v4/BE/nld/web/channels?"
+                "includeInvisible=false"
+                "&sort=channelNumber")
 
-        json = Utils.get_json(r)
+        json_data = r.json()
 
         useful_channel_data = []
-        if "channels" in json:
-            fetched_channel_data = json["channels"]
+        entitlements = PluginCache.get_by_key("entitlements")
+
+        if not entitlements:
+            return useful_channel_data
+
+        if "channels" in json_data:
+            fetched_channel_data = json_data["channels"]
             for channel_data in fetched_channel_data:
                 station = channel_data["stationSchedules"][0]["station"]
                 video_streams = station["videoStreams"]
 
                 if video_streams:
+                    channel = Channel(channel_data["id"],
+                                      station["id"],
+                                      channel_data["title"],
+                                      channel_data["channelNumber"],
+                                      bool(station["hasLiveStream"]),
+                                      station["entitlements"])
+
+                    if not any(x in entitlements for x in channel.entitlements):
+                        continue
+
                     HLS_stream = {}
                     DASH_stream = {}
                     HSS_stream = {}
@@ -101,14 +170,6 @@ class TelenetTV(Authentication):
                                 video_stream["contentLocator"],
                                 video_stream["protectionKey"])
 
-                    channel = Channel(channel_data["title"],
-                                      channel_data["channelNumber"],
-                                      bool(station["hasLiveStream"]),
-                                      station["entitlements"],
-                                      DASH_stream,
-                                      HLS_stream,
-                                      HSS_stream)
-
                     thumbnail = [img["url"] for img in station["images"]
                                  if img["assetType"] == "station-logo-xlarge"][0]
 
@@ -117,6 +178,9 @@ class TelenetTV(Authentication):
 
                     channel.thumbnail = thumbnail
                     channel.stream_thumbnail = imageStream
+                    channel.stream_DASH = DASH_stream
+                    channel.stream_HLS = HLS_stream
+                    channel.stream_HSS = HSS_stream
 
                     useful_channel_data.append(channel)
 
@@ -127,110 +191,105 @@ class TelenetTV(Authentication):
         self._get_oesp_token()
 
     def clear_streams(self):
-        HEADER = {
-            'User-Agent': self.USER_AGENT,
-            'Accept': 'application/json',
-            'Content-Type': 'application/json',
-            'X-OESP-Token': self.oesp_token,
-            'X-OESP-Username': self.username,
-            'X-OESP-Profile-Id': self.shared_profile_id
-        }
+        r = Utils.make_request(
+            self.session,
+            method="POST",
+            url="https://obo-prod.oesp.telenettv.be/oesp/v4/BE/nld/web/playback/clearstreams",
+            headers=self.construct_header())
 
-        r = self.session.post("https://obo-prod.oesp.telenettv.be/oesp/v4/BE/nld/web/playback/clearstreams",
-                              headers=HEADER)
+    def _check_registered_devices(self):
+        r = Utils.make_request(
+            self.session,
+            method="GET",
+            url="https://obo-prod.oesp.telenettv.be/oesp/v4/BE/nld/web/devices/status",
+            headers=self.construct_header())
 
-    def check_registered_devices(self, device_id):
-        HEADER = {
-            'User-Agent': self.USER_AGENT,
-            'Accept': 'application/json',
-            'Content-Type': 'application/json',
-            'X-OESP-Token': self.oesp_token,
-            'X-OESP-Username': self.username,
-            'X-OESP-Profile-Id': self.shared_profile_id
-        }
+        json_data = r.json()
 
-        r = self.session.get("https://obo-prod.oesp.telenettv.be/oesp/v4/BE/nld/web/devices/status", headers=HEADER)
+        return json_data
 
-        json = r.json()
+    def get_registered_device_list(self):
+        json_data = self._check_registered_devices()
+        return Device.get_list(json_data)
 
-        currentRegisteredDevices = int(json["currentRegisteredDevices"])
-        maxRegisteredDevices = int(json["maxRegisteredDevices"])
+    def registered_device_limit_reached(self):
+        json_data = self._check_registered_devices()
 
-        if currentRegisteredDevices < maxRegisteredDevices:
-            self._register_device(device_id)
+        current_registered = int(json_data["currentRegisteredDevices"])
+        max_registered = int(json_data["maxRegisteredDevices"])
+
+        return current_registered >= max_registered
 
     def replace_registered_device(self, old_device_id, new_device_id):
-        HEADER = {
-            'User-Agent': self.USER_AGENT,
-            'Accept': 'application/json',
-            'Content-Type': 'application/json',
-            'X-OESP-Token': self.oesp_token,
-            'X-OESP-Username': self.username,
-            'X-OESP-Profile-Id': self.shared_profile_id,
-            'X-Client-Id': self.CLIENT_ID
-        }
-
-        data = {
+        json_payload = {
             "deviceId": new_device_id,
             "deviceName": DEVICE_NAME,
             "customerDefinedName": DEVICE_NAME,
             "deviceClass": DEVICE_CLASS
         }
 
-        r = self.session.put("https://obo-prod.oesp.telenettv.be/oesp/v4/BE/nld/web/devices/{}".format(old_device_id),
-                             data=jsn.dumps(data),
-                             headers=HEADER)
+        r = Utils.make_request(
+            self.session,
+            method="PUT",
+            url="https://obo-prod.oesp.telenettv.be/oesp/v4/BE/nld/web/devices/{}".format(old_device_id),
+            headers=self.construct_header(),
+            data=json_payload)
 
-        json = r.json()
+        json_data = r.json()
 
-        return json["deviceId"]
+        return json_data["deviceId"]
+
+    def _request_license_token(self, content_locator):
+        json_payload = {
+            "contentLocator": content_locator
+        }
+
+        r = Utils.make_request(
+            self.session,
+            method="POST",
+            url="https://obo-prod.oesp.telenettv.be/oesp/v4/BE/nld/web/license/token",
+            headers=self.construct_header(),
+            data=json_payload)
+
+        try:
+            json_data = r.json()
+        except ValueError:
+            json_data = ""
+
+        return r.status_code, json_data
 
     def request_license_token(self, content_locator):
-        if PluginCache.key_exists("oespToken"):
-            self.resume_session()
+        # retry once
+        for _ in range(2):
+            status_code, json_data = self._request_license_token(content_locator)
 
-        HEADER = {
-            'User-Agent': self.USER_AGENT,
-            'Accept': 'application/json',
-            'Content-Type': 'application/json',
-            'X-OESP-Token': self.oesp_token,
-            'X-OESP-Username': self.username,
-            'X-OESP-Profile-Id': self.shared_profile_id,
-            'X-Client-Id': self.CLIENT_ID
-        }
-
-        json = {
-            "contentLocator": content_locator,
-            "deviceId": self.device_id
-        }
-
-        r = self.session.post("https://obo-prod.oesp.telenettv.be/oesp/v4/BE/nld/web/license/token",
-                              data=jsn.dumps(json), headers=HEADER)
-        try:
-            json = r.json()
-
-            if r.status_code == 200:
-                license_token = json["token"]
+            if status_code == 200:
+                license_token = json_data.get("token")
 
                 PluginCache.set_data({
                     "licenseToken": license_token
                 })
-            elif r.status_code == 400:
-                error_obj = json[0]
-                if "code" in error_obj and error_obj["code"] == "deviceUnregistered":
-                    self.check_registered_devices(self.device_id)
-                elif "code" in error_obj and error_obj["code"] == "deviceUnregisteredDeviceLimitReached":
-                    deviceId = self.replace_registered_device(self.device_id, Utils.create_token(64))
 
-                    PluginCache.set_data({
-                        "deviceId": deviceId
-                    })
+                break
+            elif status_code == 400:
+                new_device_id = Utils.create_token(64)
+                bad_request = BadRequest.parse_error_object(json_data)
 
-                self.request_license_token(content_locator)
-        except KeyError:
-            self.logger.error("There was a problem with the JSON Package")
+                if bad_request.code == BadRequest.KnownErrorCodes.DEVICE_UNREGISTERED:
+                    self._register_device(new_device_id)
+                    PluginCache.set_data({"deviceId": new_device_id})
+                elif bad_request.code == BadRequest.KnownErrorCodes.DEVICE_UNREGISTERED_DEVICE_LIMIT_REACHED:
+                    # get the existing registered devices
+                    existing_devices = self.get_registered_device_list()
 
-    def create_manifest_url(self, channel):
+                    # select a random device to swap
+                    random_device = random.choice(existing_devices)
+
+                    # replace registered device with the randomly selected one
+                    self.replace_registered_device(random_device.device_id, new_device_id)
+                    PluginCache.set_data({"deviceId": new_device_id})
+
+    def create_manifest_url(self, base_uri, channel):
         self.license_token = PluginCache.get_by_key("licenseToken")
 
         streaming_format = StreamingFormat.get_streaming_format()
@@ -241,23 +300,20 @@ class TelenetTV(Authentication):
         else:
             url = ""
 
+<<<<<<< HEAD
+        formatted_url = url.format(base_uri, channel, self.license_token)
+=======
         formatted_url = url.format(channel, self.license_token)
+>>>>>>> c31fd948d956a294f41647f99afecc5c7c8e6ae6
 
         return formatted_url
 
     def _get_refresh_token(self):
-        HEADER = {
-            'Accept': 'application/json',
-            'Content-Type': 'application/json',
-            'User-Agent': self.USER_AGENT,
-            'DNT': '1'
-        }
-
         token = PluginCache.get_by_key("token")
         validity_token = PluginCache.get_by_key("validityToken")
         state = PluginCache.get_by_key("state")
 
-        data = {
+        json_payload = {
             "authorizationGrant":
                 {
                     "authorizationCode": token,
@@ -266,66 +322,100 @@ class TelenetTV(Authentication):
                 }
         }
 
-        r = self.session.post("https://obo-prod.oesp.telenettv.be/oesp/v4/BE/nld/web/authorization",
-                              data=jsn.dumps(data), headers=HEADER)
+        r = Utils.make_request(
+            self.session,
+            method="POST",
+            url="https://obo-prod.oesp.telenettv.be/oesp/v4/BE/nld/web/authorization",
+            headers=self.construct_header(),
+            data=json_payload)
 
-        json = r.json()
+        json_data = r.json()
 
-        refresh_token = json["refreshToken"]
+        refresh_token = json_data["refreshToken"]
 
         PluginCache.set_data({
             "refreshToken": refresh_token,
         })
 
     def _get_oesp_token(self):
-        HEADER = {
-            'Accept': 'application/json',
-            'Content-Type': 'application/json',
-            'User-Agent': self.USER_AGENT,
-            'DNT': '1'
-        }
-
         refresh_token = PluginCache.get_by_key("refreshToken")
 
-        data = {
+        json_payload = {
             "refreshToken": refresh_token,
             "username": self.username
         }
 
-        r = self.session.post("https://obo-prod.oesp.telenettv.be/oesp/v4/BE/nld/web/session?token=true",
-                              data=jsn.dumps(data), headers=HEADER)
+        r = Utils.make_request(
+            self.session,
+            method="POST",
+            url="https://obo-prod.oesp.telenettv.be/oesp/v4/BE/nld/web/session?token=true",
+            headers=self.construct_header(),
+            data=json_payload)
 
-        json = r.json()
+        json_data = r.json()
 
-        oesp_token = json["oespToken"]
-        shared_profile_id = json["customer"]["sharedProfileId"]
+        oesp_token = json_data["oespToken"]
+        shared_profile_id = json_data["customer"]["sharedProfileId"]
+        entitlements = json_data["entitlements"]
 
         PluginCache.set_data({
             "oespToken": oesp_token,
-            "sharedProfileId": shared_profile_id
+            "sharedProfileId": shared_profile_id,
+            "entitlements": entitlements
         })
 
-    def _register_device(self, device_id):
-        HEADER = {
-            'User-Agent': self.USER_AGENT,
-            'Accept': 'application/json',
-            'Content-Type': 'application/json',
-            'X-OESP-Token': self.oesp_token,
-            'X-OESP-Username': self.username,
-            'X-OESP-Profile-Id': self.shared_profile_id
-        }
+    def _check_oesp_validity(self):
+        if self.oesp_token:
+            oesp_token_split = self.oesp_token.split(".")
+            middle_oesp_part = base64.b64decode(oesp_token_split[1] + 2 * "=")
 
-        data = {
+            json_data = json.loads(middle_oesp_part)
+            expiry_timestamp = json_data.get("exp")
+
+            now = datetime.utcnow()
+            expiry_date = datetime.fromtimestamp(expiry_timestamp) - timedelta(minutes=TOKEN_EXPIRY_GAP_MINUTES)
+
+            # renew oesp token
+            if now >= expiry_date:
+                self.refresh_token()
+
+    def _register_device(self, device_id):
+        json_payload = {
             "deviceId": device_id,
             "deviceName": DEVICE_NAME,
             "customerDefinedName": DEVICE_NAME,
             "deviceClass": DEVICE_CLASS
         }
 
-        r = self.session.post("https://obo-prod.oesp.telenettv.be/oesp/v4/BE/nld/web/devices",
-                              data=jsn.dumps(data),
-                              headers=HEADER)
+        r = Utils.make_request(
+            self.session,
+            method="POST",
+            url="https://obo-prod.oesp.telenettv.be/oesp/v4/BE/nld/web/devices",
+            headers=self.construct_header(),
+            data=json_payload)
 
         if r.status_code != 204:
             self.logger.error("An error has occurred trying to register the device.")
 
+    def get_server_certificate(self, content_locator):
+        r = Utils.make_request(
+            self.session,
+            method="POST",
+            url="https://obo-prod.oesp.telenettv.be/oesp/v4/BE/nld/web/license/eme",
+            headers={
+                "User-Agent": self.USER_AGENT,
+                "Connection": 'keep-alive',
+                "Referer": "https://www.telenettv.be/",
+                "Content-Type": "application/octet-stream",
+                "X-OESP-Content-Locator": content_locator,
+                "X-OESP-DRM-SchemeIdUri": "urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed",
+                "X-OESP-License-Token": self.license_token,
+                "X-OESP-License-Token-Type": "velocix",
+                "X-OESP-Token": self.oesp_token,
+                "X-OESP-Username": self.username
+            },
+            data="\b\x04",
+            is_json=False
+        )
+
+        return base64.b64encode(r.content)

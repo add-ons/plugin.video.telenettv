@@ -18,17 +18,27 @@ class Authentication(object):
         self.username = Credentials.get_username()
         self.passwd = Credentials.get_password()
 
-    def login(self):
-        HEADER = {
+    def construct_header(self, content_type='application/json'):
+        header = {
+            'Accept': content_type,
+            'Content-Type': content_type,
             'User-Agent': self.USER_AGENT,
-            'X-Client-Id': self.CLIENT_ID
+            'DNT': '1'
         }
 
-        r = self.session.post("https://login.prd.telenet.be/openid/login.do",
-                              data={
-                                  'j_username': '{}'.format(self.username),
-                                  'j_password': '{}'.format(self.passwd)
-                              }, headers=HEADER)
+        return header
+
+    def login(self):
+        r = Utils.make_request(
+            self.session,
+            method="POST",
+            url="https://login.prd.telenet.be/openid/login.do",
+            headers=self.construct_header(content_type="application/x-www-form-urlencoded"),
+            data={
+                'j_username': '{}'.format(self.username),
+                'j_password': '{}'.format(self.passwd),
+                'rememberme': 'true'
+            }, is_json=False)
 
         last_response = r.history[-1]
 
@@ -41,33 +51,28 @@ class Authentication(object):
             })
 
     def authorize(self):
-        self.session.get(self.authorization_uri,
-                         allow_redirects=False)
+        Utils.make_request(
+            self.session,
+            method="GET",
+            url=self.authorization_uri,
+            headers={'User-Agent': self.USER_AGENT},
+            allow_redirects=False)
 
     def web_authorization(self):
-        HEADER = {
-            'Accept': 'application/json',
-            'Content-Type': 'application/json',
-            'User-Agent': self.USER_AGENT,
-            'DNT': '1'
-        }
+        r = Utils.make_request(
+            self.session,
+            method="GET",
+            url="https://obo-prod.oesp.telenettv.be/oesp/v4/BE/nld/web/authorization",
+            headers=self.construct_header())
 
-        r = self.session.get("https://obo-prod.oesp.telenettv.be/oesp/v4/BE/nld/web/authorization", headers=HEADER)
+        json_data = r.json()
 
-        json = r.json()
+        self.authorization_uri = json_data["session"]["authorizationUri"]
 
-        self.authorization_uri = json["session"]["authorizationUri"]
-
-        validity_token = json["session"]["validityToken"]
-        state = json["session"]["state"]
+        validity_token = json_data["session"]["validityToken"]
+        state = json_data["session"]["state"]
 
         PluginCache.set_data({
             "validityToken": validity_token,
             "state": state
         })
-
-
-
-
-
-
