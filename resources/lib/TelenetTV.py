@@ -298,11 +298,7 @@ class TelenetTV(Authentication):
         else:
             url = ""
 
-<<<<<<< HEAD
         formatted_url = url.format(base_uri, channel, self.license_token)
-=======
-        formatted_url = url.format(channel, self.license_token)
->>>>>>> c31fd948d956a294f41647f99afecc5c7c8e6ae6
 
         return formatted_url
 
